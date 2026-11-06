@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"testing"
 )
 
@@ -68,6 +69,32 @@ func TestArgumentFiltering(t *testing.T) {
 				if i >= len(unknownFlags) || unknownFlags[i] != expected {
 					t.Errorf("Unknown flags mismatch at index %d. Expected: %s, Got: %s", i, expected, unknownFlags[i])
 				}
+			}
+		})
+	}
+}
+// KServe runs a storage container as `<image> <storageUri> <destination>`, so the second
+// positional argument is the output directory unless --directory says otherwise.
+func TestOutputDir(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name    string
+		flagDir string
+		args    []string
+		want    string
+	}{
+		{"URL only: current directory, as before", "", []string{"s3://b/model.tar"}, cwd},
+		{"KServe: second argument", "", []string{"s3://b/model.tar", "/mnt/models"}, "/mnt/models"},
+		{"--directory wins over the second argument", "/data", []string{"s3://b/model.tar", "/mnt/models"}, "/data"},
+		{"--directory with URL only", "/data", []string{"s3://b/model.tar"}, "/data"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got, err := outputDir(c.flagDir, c.args); err != nil || got != c.want {
+				t.Errorf("outputDir(%q, %v) = %q, %v; want %q", c.flagDir, c.args, got, err, c.want)
 			}
 		})
 	}
