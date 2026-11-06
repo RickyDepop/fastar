@@ -129,8 +129,8 @@ func ExtractTar(stream io.Reader) {
 					header.Name)
 			}
 		}
-		if (uint64)(time.Since(lastLog).Seconds()) >= 30 {
-			log.Printf("Average write speed %.3fMBps\n", (float64)(bytesWritten.Load())/1e3/(float64(writeTimeMilli.Load())))
+		if time.Since(lastLog) >= progressLogInterval {
+			log.Printf("Average write speed %.3fMBps\n", mbPerSecond(float64(bytesWritten.Load()), float64(writeTimeMilli.Load())))
 			lastLog = time.Now()
 		}
 	}

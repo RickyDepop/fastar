@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"mime/multipart"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -80,7 +81,7 @@ func handleGcsError(err error, requestType string) {
 				log.Printf("404, %s failed, GCS object doesn't exist\n", requestType)
 				os.Exit(int(unix.ENOENT))
 			}
-			if e.Code == 404 {
+			if e.Code == http.StatusNotFound {
 				log.Printf("404, %s failed, GCS object or bucket doesn't exist\n", requestType)
 				os.Exit(int(unix.ENOENT))
 			}
