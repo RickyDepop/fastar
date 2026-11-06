@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"flag"
 	"fmt"
 	"io"
 	"math/rand"
@@ -11,7 +12,6 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/pierrec/lz4"
 )
@@ -82,32 +82,50 @@ func archive(tb testing.TB, files []modelFile, format string) []byte {
 
 // runFastar does what the CLI does: download url, decompress it and extract it into dir.
 func runFastar(url, dir string, chunkSize int64, numWorkers int) {
-	downloader := GetDownloader(url, false, false)
+	downloader := GetDownloader(url, false, false, numWorkers)
 	defer downloader.(HttpDownloader).client.CloseIdleConnections()
 	opts.OutputDir = dir
 	ExtractTar(decompress(GetDownloadStream(downloader, chunkSize, numWorkers), filepath.Base(url)))
 }
 
+// CLI defaults (see opts in fastar.go), so the benchmark runs fastar as users do.
+const (
+	cliDownloadWorkers = 4
+	cliWriteWorkers    = 8
+	cliMaxBufferSize   = 64e6 // bytes
+)
+
 // useCLIExtractOpts sets the extraction options to the CLI defaults.
 func useCLIExtractOpts() {
-	opts.WriteWorkers = 8
-	opts.MaxBufferSize = 64e6
+	opts.WriteWorkers = cliWriteWorkers
+	opts.MaxBufferSize = cliMaxBufferSize
 }
 
 var formats = []string{"tar", "tar.gz", "tar.lz4"}
 
+// lz4 is off by default in the benchmark: we don't plan to use it, and it only adds lz4.NewReader.
+var benchLz4 = flag.Bool("lz4", false, "also run BenchmarkFastar on .tar.lz4")
+
+func benchFormats() []string {
+	if *benchLz4 {
+		return formats
+	}
+	return []string{"tar", "tar.gz"}
+}
+
 func TestFastarPipeline(t *testing.T) {
+	const chunkSize = 100 << 10
 	files := modelFiles(64 << 10)
 	for _, format := range formats {
 		srv := (&fakeStore{data: archive(t, files, format)}).start()
 		defer srv.Close()
 		for _, workers := range []int{1, 4} {
 			t.Run(fmt.Sprintf("%s/workers=%d", format, workers), func(t *testing.T) {
-				useTestOpts(t, 100<<10)
+				useTestOpts(t, chunkSize)
 				useCLIExtractOpts()
 				opts.MaxBufferSize = 1 << 20 // below the biggest file, so it is streamed
 				dir := t.TempDir()
-				runFastar(srv.URL+"/model."+format, dir, 100<<10, workers)
+				runFastar(srv.URL+"/model."+format, dir, chunkSize, workers)
 				for _, f := range files {
 					got, err := os.ReadFile(filepath.Join(dir, f.name))
 					if err != nil || !bytes.Equal(got, f.data) {
@@ -129,12 +147,11 @@ var benchArchives struct {
 // MB/s of extracted data so formats compare directly. Files land in the page cache, so it
 // measures fastar rather than the disk.
 func BenchmarkFastar(b *testing.B) {
-	const chunkSize = 4 << 20
 	// Built once per process, since -count reruns this function.
 	benchArchives.once.Do(func() {
 		benchArchives.files = modelFiles(4 << 20) // 144 MiB extracted
 		benchArchives.data = map[string][]byte{}
-		for _, format := range formats {
+		for _, format := range benchFormats() {
 			benchArchives.data[format] = archive(b, benchArchives.files, format)
 		}
 	})
@@ -148,16 +165,15 @@ func BenchmarkFastar(b *testing.B) {
 		s    fakeStore
 	}{
 		{"local", fakeStore{}},
-		// Same as BenchmarkDownload's s3like.
-		{"s3like", fakeStore{ttfb: 20 * time.Millisecond, connSetup: 20 * time.Millisecond, rate: 90e6}},
+		{"s3like", fakeStore{ttfb: s3likeFirstByteLatency, connSetup: s3likeConnSetup, rate: s3likeRate}},
 	} {
-		for _, format := range formats {
+		for _, format := range benchFormats() {
 			s := store.s
 			s.data = benchArchives.data[format]
 			srv := s.start()
 			defer srv.Close()
 			b.Run(fmt.Sprintf("%s/%s", store.name, format), func(b *testing.B) {
-				useTestOpts(b, chunkSize)
+				useTestOpts(b, benchChunkSize)
 				useCLIExtractOpts()
 				b.SetBytes(extracted)
 				for i := 0; i < b.N; i++ {
@@ -167,7 +183,7 @@ func BenchmarkFastar(b *testing.B) {
 						b.Fatal(err)
 					}
 					b.StartTimer()
-					runFastar(srv.URL+"/model."+format, dir, chunkSize, 4)
+					runFastar(srv.URL+"/model."+format, dir, benchChunkSize, cliDownloadWorkers)
 					b.StopTimer()
 					for _, f := range benchArchives.files {
 						if info, err := os.Stat(filepath.Join(dir, f.name)); err != nil || info.Size() != int64(len(f.data)) {

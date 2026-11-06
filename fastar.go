@@ -12,6 +12,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jessevdk/go-flags"
 	"github.com/pierrec/lz4"
@@ -43,6 +44,21 @@ var opts struct {
 
 var minSpeedBytesPerMillisecond = 0.0
 
+// Sizes and speeds are in decimal units, as the flags' K and M suffixes are.
+const (
+	bytesPerKB      = 1e3
+	bytesPerMB      = 1e6
+	millisPerSecond = 1e3
+)
+
+// mbPerSecond converts a byte count and a duration in milliseconds to MB/s, for logging.
+func mbPerSecond(bytes, millis float64) float64 {
+	return bytes / bytesPerMB / (millis / millisPerSecond)
+}
+
+// How often long downloads and extractions log their average speed.
+const progressLogInterval = 30 * time.Second
+
 // Magic byte sequences prepended to the start of every gzip or lz4
 // compressed bundle. When downloading a file we can check for either
 // of these sequences to automatically infer if we need to perform
@@ -50,6 +66,8 @@ var minSpeedBytesPerMillisecond = 0.0
 const (
 	gzipMagicNumber = "1f8b"
 	lz4MagicNumber  = "04224d18"
+	// Bytes read to detect the format: lz4's magic number, the longer of the two.
+	magicNumberLen = 4
 )
 
 type CompressionType int
@@ -100,9 +118,9 @@ func main() {
 	args = cleanArgs
 	var rawUrl = args[0]
 	processMinSpeedFlag()
-	opts.ChunkSize *= 1e6     // Convert chunk size from MB to B
-	opts.MaxBufferSize *= 1e6 // Convert max buffer size from MB to B
-	fileStream := GetDownloadStream(GetDownloader(rawUrl, opts.UseFips, opts.UseGetForSize), opts.ChunkSize, opts.NumWorkers)
+	opts.ChunkSize *= bytesPerMB
+	opts.MaxBufferSize *= bytesPerMB
+	fileStream := GetDownloadStream(GetDownloader(rawUrl, opts.UseFips, opts.UseGetForSize, opts.NumWorkers), opts.ChunkSize, opts.NumWorkers)
 
 	url, err := url.Parse(rawUrl)
 	if err != nil {
@@ -112,7 +130,7 @@ func main() {
 
 	log.Println("File name: " + filename)
 	log.Printf("Num Download Workers: %d", opts.NumWorkers)
-	log.Printf("Chunk Size (Mib): %d", opts.ChunkSize/1e6)
+	log.Printf("Chunk Size (MB): %d", opts.ChunkSize/bytesPerMB)
 	log.Printf("Num Disk Workers: %d", opts.WriteWorkers)
 
 	finalStream := decompress(fileStream, filename)
@@ -156,9 +174,9 @@ func decompress(stream io.Reader, filename string) io.Reader {
 // magic numbers, returns a spliced-together reader since
 // the original io.Reader has already been read from.
 func getMagicNumber(reader io.Reader) (string, io.Reader) {
-	buf := make([]byte, 4)
+	buf := make([]byte, magicNumberLen)
 	totalRead := 0
-	for totalRead < 4 {
+	for totalRead < magicNumberLen {
 		read, err := reader.Read(buf[totalRead:])
 		if err != nil && err != io.EOF {
 			log.Fatal("Failed to read magic number:", err.Error())
@@ -223,16 +241,16 @@ func processMinSpeedFlag() {
 		if bytesPerSecond, err = strconv.Atoi((opts.MinSpeed)[:len(opts.MinSpeed)-1]); err != nil {
 			log.Fatal("Failed to parse min speed argument", opts.MinSpeed, err.Error())
 		}
-		bytesPerSecond *= 1e3
+		bytesPerSecond *= bytesPerKB
 	} else if strings.HasSuffix(opts.MinSpeed, "M") {
 		if bytesPerSecond, err = strconv.Atoi((opts.MinSpeed)[:len(opts.MinSpeed)-1]); err != nil {
 			log.Fatal("Failed to parse min speed argument", opts.MinSpeed, err.Error())
 		}
-		bytesPerSecond *= 1e6
+		bytesPerSecond *= bytesPerMB
 	} else {
 		if bytesPerSecond, err = strconv.Atoi(opts.MinSpeed); err != nil {
 			log.Fatal("Failed to parse min speed argument", opts.MinSpeed, err.Error())
 		}
 	}
-	minSpeedBytesPerMillisecond = float64(bytesPerSecond) / 1e3
+	minSpeedBytesPerMillisecond = float64(bytesPerSecond) / millisPerSecond
 }

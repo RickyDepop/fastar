@@ -143,7 +143,7 @@ func (httpDownloader HttpDownloader) retryHttpRequest(req *http.Request) *http.R
 						log.Println("response body:", string(body))
 					}
 				}
-				if curResp.StatusCode == 404 {
+				if curResp.StatusCode == http.StatusNotFound {
 					log.Println("404, file not found")
 					os.Exit(int(unix.ENOENT))
 				}
@@ -155,7 +155,7 @@ func (httpDownloader HttpDownloader) retryHttpRequest(req *http.Request) *http.R
 				}
 				// Azure blob storage can return either 429 or 503 when throttling
 				// https://learn.microsoft.com/en-us/azure/storage/blobs/scalability-targets
-				if curResp.StatusCode == 429 || curResp.StatusCode == 503 {
+				if curResp.StatusCode == http.StatusTooManyRequests || curResp.StatusCode == http.StatusServiceUnavailable {
 					throttled = true
 					return errors.New("throttled by download server " + strconv.Itoa(curResp.StatusCode))
 				}

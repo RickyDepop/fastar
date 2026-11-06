@@ -84,7 +84,7 @@ Download + decompress + extract to ramFS (`wget | tar` vs `aria2c && tar` vs `fa
 All run against a local fake object store, unthrottled (`local`) and with simulated S3 latency and per-connection bandwidth (`s3like`):
 
 - `BenchmarkDownload`: download only, 128 MiB; reports MB/s and connections opened per download.
-- `BenchmarkFastar`: the whole CLI pipeline (download, decompress, extract) for `.tar`, `.tar.gz` and `.tar.lz4`; reports MB/s of extracted data.
+- `BenchmarkFastar`: the whole CLI pipeline (download, decompress, extract) for `.tar` and `.tar.gz` (add `-lz4` for `.tar.lz4`); reports MB/s of extracted data.
 - `BenchmarkExtractLargeFile`: extraction of one 512 MiB file, buffered and streamed.
 
 To compare a change against `master`:

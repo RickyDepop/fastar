@@ -64,13 +64,16 @@ type Downloader interface {
 	GetRanges(ranges [][]int64) (*multipart.Reader, error)
 }
 
-func GetDownloader(url string, useFips bool, useGetForSize bool) Downloader {
+func GetDownloader(url string, useFips bool, useGetForSize bool, numWorkers int) Downloader {
 	// NOTE: Only S3 + HTTP downloaders use this transport. GCS uses the default transport configured by the SDK.
 	var netTransport = &http.Transport{
 		Dial: (&net.Dialer{
 			Timeout: time.Duration(opts.ConnTimeout) * time.Second,
 		}).Dial,
 		TLSHandshakeTimeout: time.Duration(opts.ConnTimeout) * time.Second,
+		// Keep one idle connection per worker. With the default of 2, the pool closes the
+		// others between chunks, and their next chunk pays for TCP and TLS set-up again.
+		MaxIdleConnsPerHost: numWorkers,
 	}
 	var httpClient = http.Client{
 		Transport: netTransport,
@@ -141,7 +144,7 @@ func GetDownloader(url string, useFips bool, useGetForSize bool) Downloader {
 func GetDownloadStream(downloader Downloader, chunkSize int64, numWorkers int) io.Reader {
 	var size, supportsRange, supportsMultipart = downloader.GetFileInfo()
 	log.Printf("File Size (B): %d", size)
-	log.Printf("File Size (MiB): %d", size/1e6)
+	log.Printf("File Size (MB): %d", size/bytesPerMB)
 	log.Println("Supports RANGE:", supportsRange)
 	log.Println("Supports multipart RANGE:", supportsMultipart)
 	if !supportsRange || size < chunkSize {
@@ -265,9 +268,8 @@ func writePartial(
 					break
 				}
 
-				if time.Since(lastLogTime).Seconds() >= 30 {
-					var timeSoFarSec = (timeDownloadingMilli + timeSpentOnChunk()) / 1e3
-					log.Printf("Worker %d downloading average %.3fMBps\n", workerNum, totalReadForWorker/1e6/timeSoFarSec)
+				if time.Since(lastLogTime) >= progressLogInterval {
+					log.Printf("Worker %d downloading average %.3fMBps\n", workerNum, mbPerSecond(totalReadForWorker, timeDownloadingMilli+timeSpentOnChunk()))
 					lastLogTime = time.Now()
 				}
 
@@ -275,17 +277,17 @@ func writePartial(
 				// after MinSpeedWait seconds.
 				var attemptTimeMilli = float64(time.Since(attemptStartTime).Milliseconds())
 				var attemptReadSpeed = totalReadForAttempt / attemptTimeMilli
-				var chunkTooSlowSoFar = attemptTimeMilli/1e3 > float64(opts.MinSpeedWait) && attemptReadSpeed < minSpeedBytesPerMillisecond
+				var chunkTooSlowSoFar = attemptTimeMilli/millisPerSecond > float64(opts.MinSpeedWait) && attemptReadSpeed < minSpeedBytesPerMillisecond
 				if chunkTooSlowSoFar || err != nil {
 					if attemptNumber > opts.RetryCount {
 						log.Printf("Too many slow/stalled/failed connections for worker %d's chunk, giving up.", workerNum)
-						log.Printf("Worker %d final download speed %.3fMBps\n", workerNum, totalReadForWorker/1e3/(timeDownloadingMilli+timeSpentOnChunk()))
+						log.Printf("Worker %d final download speed %.3fMBps\n", workerNum, mbPerSecond(totalReadForWorker, timeDownloadingMilli+timeSpentOnChunk()))
 						os.Exit(int(unix.EIO))
 					}
 					if err != nil {
 						log.Printf("Worker %d failed to read current chunk, resetting connection: %s\n", workerNum, err.Error())
 					} else {
-						log.Printf("Worker %d too slow so far for current chunk (download attempt averaged %.3fMBps), resetting connection\n", workerNum, attemptReadSpeed/1e3)
+						log.Printf("Worker %d too slow so far for current chunk (download attempt averaged %.3fMBps), resetting connection\n", workerNum, mbPerSecond(totalReadForAttempt, attemptTimeMilli))
 					}
 					// Reset info relative to what we have left to download for this chunk
 					reader.Reset(reader.CurChunkStart + totalReadForChunk)
@@ -331,7 +333,7 @@ func writePartial(
 		// Log before handing on the token: the last worker closes the pipe, after which
 		// the consumer may finish and exit before a later log line is printed.
 		if reader.CurChunkStart+chunkSize*int64(numWorkers) >= size {
-			log.Printf("Worker %d final download speed %.3fMBps\n", workerNum, totalReadForWorker/1e3/timeDownloadingMilli)
+			log.Printf("Worker %d final download speed %.3fMBps\n", workerNum, mbPerSecond(totalReadForWorker, timeDownloadingMilli))
 		}
 
 		// Trigger next worker to start writing to stdout.
