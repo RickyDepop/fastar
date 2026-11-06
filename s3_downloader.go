@@ -20,8 +20,18 @@ type S3Downloader struct {
 }
 
 func (s3Downloader S3Downloader) GetFileInfo() (int64, bool, bool) {
-	resp := s3Downloader.getObject(nil)
-	resp.Body.Close()
+	bucket, key := getBucketAndKey(s3Downloader.Url)
+	resp, err := s3Downloader.client.HeadObject(context.Background(), &s3.HeadObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		// HEAD errors have no body, so S3's error code is lost; a GET fails the same way and
+		// reports it, so getObject can exit with the right status.
+		getResp := s3Downloader.getObject(nil)
+		getResp.Body.Close()
+		return *getResp.ContentLength, true, false
+	}
 	return *resp.ContentLength, true, false
 }
 
