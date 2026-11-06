@@ -21,7 +21,7 @@ import (
 var opts struct {
 	NumWorkers      int               `long:"download-workers" default:"4" description:"How many parallel workers to download the file"`
 	ChunkSize       int64             `long:"chunk-size" default:"200" description:"Size of file chunks (in MB) to pull in parallel"`
-	OutputDir       string            `long:"directory" short:"C" description:"Directory to extract tarball to. Defaults to current dir if not specified"`
+	OutputDir       string            `long:"directory" short:"C" description:"Directory to extract tarball to. Defaults to the second positional argument, then the current dir"`
 	ToStdout        bool              `long:"to-stdout" short:"O" description:"Dump downloaded file to stdout rather than extracting to disk"`
 	WriteWorkers    int               `long:"write-workers" default:"8" description:"How many parallel workers to use to write file to disk"`
 	MaxBufferSize   int64             `long:"max-buffer-size" default:"64" description:"Files up to this size (in MB) are read into memory and written by a background worker; larger files are streamed to disk, so peak memory is about write-workers x this size"`
@@ -140,13 +140,23 @@ func main() {
 			log.Fatal("Failed to write file to stdout: ", err.Error())
 		}
 	} else {
-		if opts.OutputDir == "" {
-			if opts.OutputDir, err = os.Getwd(); err != nil {
-				log.Fatal("Failed to get current working directory: ", err.Error())
-			}
+		if opts.OutputDir, err = outputDir(opts.OutputDir, args); err != nil {
+			log.Fatal("Failed to get current working directory: ", err.Error())
 		}
 		ExtractTar(finalStream)
 	}
+}
+
+// outputDir returns --directory if set, else the second positional argument (KServe runs a
+// storage container as `<image> <storageUri> <destination>`), else the current directory.
+func outputDir(flagDir string, args []string) (string, error) {
+	if flagDir != "" {
+		return flagDir, nil
+	}
+	if len(args) > 1 {
+		return args[1], nil
+	}
+	return os.Getwd()
 }
 
 // Returns the tar stream inside stream, decompressing it if needed.

@@ -173,7 +173,7 @@ func TestDownloadOverHTTP(t *testing.T) {
 
 // Each worker downloads one chunk at a time, so connections should stay near one per worker;
 // each extra one pays TCP and TLS set-up again. Go opens a few more when a request starts
-// dialling just before another connection comes free. Without reuse, 4 workers opened 11-31.
+// dialling just before another connection comes free. Without reuse, 4 workers opened 8-19.
 func TestDownloadReusesConnections(t *testing.T) {
 	const chunkSize, chunks, maxConnsPerWorker = 1000, 64, 2
 	data := []byte(RandomString(chunkSize * chunks))
@@ -181,7 +181,9 @@ func TestDownloadReusesConnections(t *testing.T) {
 	for _, workers := range []int{1, 4, 8} {
 		t.Run(fmt.Sprintf("workers=%d", workers), func(t *testing.T) {
 			useTestOpts(t, chunkSize)
-			store := &fakeStore{data: data}
+			// The delay lets each connection get back to the pool before its worker asks for the
+			// next one; with instant responses Go often dials a spare, so counts depend on timing.
+			store := &fakeStore{data: data, ttfb: time.Millisecond}
 			srv := store.start()
 			defer srv.Close()
 			if got, err := download(srv.URL, chunkSize, workers); err != nil || got != want {
