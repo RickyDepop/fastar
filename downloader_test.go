@@ -80,7 +80,15 @@ func (testDownloader TestDownloader) GetRanges(ranges [][]int64) (*multipart.Rea
 	// return nil, nil
 }
 
+// discardLogs silences the log package until t ends. The brute-force reader tests check only
+// the data; their injected failures log about 10 million lines, which CI takes minutes to stream.
+func discardLogs(t *testing.T) {
+	log.SetOutput(io.Discard)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+}
+
 func TestSingleReader(t *testing.T) {
+	discardLogs(t)
 	opts.RetryCount = math.MaxInt64
 	for fileSize := int64(0); fileSize < 64; fileSize++ {
 		data := RandomString(fileSize)
@@ -101,6 +109,7 @@ func TestSingleReader(t *testing.T) {
 }
 
 func TestRangeReader(t *testing.T) {
+	discardLogs(t)
 	opts.RetryCount = math.MaxInt64
 	for fileSize := int64(0); fileSize < 64; fileSize++ {
 		data := RandomString(fileSize)
@@ -121,6 +130,7 @@ func TestRangeReader(t *testing.T) {
 }
 
 func TestMultipartRangeReader(t *testing.T) {
+	discardLogs(t)
 	opts.RetryCount = math.MaxInt64
 	for fileSize := int64(0); fileSize < 64; fileSize++ {
 		data := RandomString(fileSize)
